@@ -2457,6 +2457,56 @@ func (o *ObservableImpl) TakeUntil(apply Predicate, opts ...Option) Observable {
 	}, true, false, opts...)
 }
 
+// TakeUntilObservable returns an Observable that emits items emitted by the source Observable
+// until a second Observable emits an item or terminates.
+func (o *ObservableImpl) TakeUntilObservable(until Iterable, opts ...Option) Observable {
+	option := parseOptions(opts...)
+	next := option.buildChannel()
+	ctx := option.buildContext(o.parent)
+
+	go func() {
+		defer close(next)
+		observeUntil := until.Observe(opts...)
+	loop1:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop1
+			case i, ok := <-observeUntil:
+				if !ok {
+					break loop1
+				}
+				if i.Error() {
+					next <- i
+					return
+				}
+				i.SendContext(ctx, next)
+			}
+		}
+		observe = o.Observe(opts...)
+	loop2:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop2
+			case i, ok := <-observe:
+				if !ok {
+					break loop2
+				}
+				if i.Error() {
+					i.SendContext(ctx, next)
+					return
+				}
+				i.SendContext(ctx, next)
+			}
+		}
+	}()
+
+	return &ObservableImpl{
+		iterable: newChannelIterable(next),
+	}
+}
+
 type takeUntilOperator struct {
 	apply Predicate
 }
